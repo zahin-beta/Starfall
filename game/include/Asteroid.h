@@ -8,6 +8,8 @@ public:
     bool IsOffScreen() const;
     Vector2 GetPosition() const { return position; }
     float GetRadius() const { return radius; }
+    float GetRotation() const { return rotation; }
+    void SetRotation(float value) { rotation = value; }
 private:
     Vector2 position{}, velocity{};
     float radius = 20.0f, rotation = 0.0f;
