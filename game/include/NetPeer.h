@@ -24,11 +24,13 @@ public:
     NetPeer(const NetPeer&) = delete;
     NetPeer& operator=(const NetPeer&) = delete;
 
-    bool Host(uint16_t port);
+    // port == 0 picks a random free port in [kGamePortMin, kGamePortMax]; otherwise binds exactly that port.
+    bool Host(uint16_t port = 0);
     bool Join(const std::string& ip, uint16_t port);
     void Close();
 
     bool IsHost() const { return isHost; }
+    uint16_t GetBoundPort() const { return boundPort; }
     Status GetStatus() const { return status.load(); }
     bool IsConnected() const { return status.load() == Status::Connected; }
     float GetRttMs() const { return rttMs.load(); }
@@ -53,6 +55,7 @@ private:
 
     uintptr_t socketHandle;
     bool isHost = false;
+    uint16_t boundPort = 0; // actual port bound by Host(); 0 when not hosting
     std::atomic<Status> status{Status::Disconnected};
     Endpoint peer{};
     mutable std::mutex peerMutex;

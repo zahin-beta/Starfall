@@ -5,6 +5,7 @@
 #include <ws2tcpip.h>
 
 #include <cstring>
+#include <random>
 
 namespace net {
 namespace {
@@ -12,6 +13,30 @@ namespace {
 constexpr float kRetransmitInterval = 0.12f;
 constexpr float kConnectionTimeout = 5.0f;
 constexpr float kConnectingTimeout = 10.0f;
+
+// Attempts to bind `sock` to INADDR_ANY:port exclusively. Returns true on success.
+bool TryBindExclusive(SOCKET sock, uint16_t port) {
+    BOOL reuse = FALSE; // no sharing: a taken port must fail loudly, not deliver garbage
+    setsockopt(sock, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, reinterpret_cast<const char*>(&reuse), sizeof(reuse));
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = INADDR_ANY;
+    address.sin_port = htons(port);
+    return bind(sock, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0;
+}
+
+// Picks a random free port in [kGamePortMin, kGamePortMax], retrying up to kPortBindAttempts times.
+// Returns 0 if no free port could be bound.
+uint16_t BindRandomFreePort(SOCKET sock) {
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<int> dist(kGamePortMin, kGamePortMax);
+    for (int attempt = 0; attempt < kPortBindAttempts; ++attempt) {
+        uint16_t candidate = static_cast<uint16_t>(dist(gen));
+        if (TryBindExclusive(sock, candidate)) return candidate;
+    }
+    return 0;
+}
 
 void EnsureWinsock() {
     static bool started = false;
@@ -36,19 +61,20 @@ bool NetPeer::Host(uint16_t port) {
     Close();
     SOCKET sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (sock == INVALID_SOCKET) { status = Status::Error; return false; }
-    BOOL reuse = TRUE;
-    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&reuse), sizeof(reuse));
-    sockaddr_in address{};
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = INADDR_ANY;
-    address.sin_port = htons(port);
-    if (bind(sock, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == SOCKET_ERROR) {
+    uint16_t bound = 0;
+    if (port == 0) {
+        bound = BindRandomFreePort(sock);
+    } else if (TryBindExclusive(sock, port)) {
+        bound = port;
+    }
+    if (bound == 0) {
         closesocket(sock);
         status = Status::Error;
         return false;
     }
     socketHandle = static_cast<uintptr_t>(sock);
     isHost = true;
+    boundPort = bound;
     peerKnown = false;
     timedOut = false;
     timeSinceRecv = 0.0f;
@@ -102,6 +128,7 @@ void NetPeer::Close() {
         closesocket(static_cast<SOCKET>(socketHandle));
         socketHandle = static_cast<uintptr_t>(INVALID_SOCKET);
     }
+    boundPort = 0;
     {
         std::lock_guard<std::mutex> lock(reliableMutex);
         outgoing.clear();

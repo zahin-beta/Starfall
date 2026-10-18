@@ -52,7 +52,7 @@ private:
     void UpdateVersus(float deltaTime);
 
     void StartSurvival();
-    void StartHosting(uint16_t port);
+    void StartHosting(uint16_t port = 0); // 0 = pick a random free port automatically
     void StartJoin(const std::string& ip, uint16_t port);
     void SendHello();
     void ReturnToMenu();
@@ -112,9 +112,9 @@ private:
     int previousHealth[2] = {3, 3};
     int previousAsteroidCount = 0;
 
-    std::string portText = "45801";
+    std::string portText = std::to_string(net::kDefaultGamePort);
     std::string manualIp = "127.0.0.1";
-    std::string manualPort = "45801";
+    std::string manualPort = std::to_string(net::kDefaultGamePort);
     bool manualEditingIp = true;
     std::vector<std::string> lobbyLines;
     int lobbySelected = 0;

@@ -33,7 +33,7 @@ Run a fresh build with build.bat, then launch build\Starfall.exe. Check each ite
 
 | Test | Steps | Expected result |
 |---|---|---|
-| Host lobby | Press 2, type a port, press Enter. | The lobby shows your IP:port and a waiting message. |
+| Host lobby | Press 2, pick a ship, press Enter. | Hosting starts automatically on a random free port; the lobby shows your IP:port (port in 49152-65000) and a waiting message. |
 | Discovery | On a second instance press 3. | The host appears in the join list. |
 | Manual connect | On a second instance press 3, then M, enter 127.0.0.1 and the host port. | The client connects and the match starts on both screens. |
 | State sync | Move and rotate on one machine. | Both screens show the same ship positions. |
@@ -46,7 +46,10 @@ Run a fresh build with build.bat, then launch build\Starfall.exe. Check each ite
 | Best of 3 | Win two rounds. | A "P1 WINS" or "P2 WINS" overlay appears; Enter returns to the menu. |
 | Prediction feel | Move your own ship while connected. | Your ship responds instantly with no visible lag. |
 | Disconnect | Close the host instance mid-match. | The client shows "CONNECTION LOST"; Enter returns to the menu. |
-| Port reuse | Host again on the same port after a match. | Hosting succeeds again (SO_REUSEADDR). |
+| Port reuse | Host again on the same port after a match. | Hosting succeeds again (SO_EXCLUSIVEADDRUSE does not block UDP rebind; Close() releases the socket first). |
+| Random port | Press 2, pick a ship, press Enter. Note the port shown. Return to menu, repeat. | Each host session uses a different random port in 49152-65000. |
+| Port taken | Occupy the bound port from another process, then host again. | A different random port is chosen; hosting still succeeds. |
+| Multiple hosts | Run two instances that both host at once. | Each gets a distinct port; both appear in a third instance's discovery list and can be joined. |
 
 ## Audio
 

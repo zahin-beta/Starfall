@@ -202,8 +202,7 @@ void Game::UpdateShipSelect() {
         if (mode == Mode::Survival) {
             StartSurvival();
         } else if (mode == Mode::Host) {
-            portText = "45801";
-            state = State::PortEntry;
+            StartHosting(); // picks a random free port automatically
         } else {
             discovery.StartClient();
             lobbyLines.clear();
@@ -252,7 +251,7 @@ void Game::UpdateClientLobby(float deltaTime) {
     }
     if (IsKeyPressed(KEY_M)) {
         manualIp = "127.0.0.1";
-        manualPort = "45801";
+        manualPort = std::to_string(net::kDefaultGamePort);
         manualEditingIp = true;
         state = State::ManualEntry;
     }
@@ -362,11 +361,12 @@ void Game::StartHosting(uint16_t port) {
     localId = 0;
     hostShipId = shipSelectId;
     if (!net.Host(port)) {
-        statusText = "Failed to open port " + std::to_string(port) + ". Try another port.";
-        state = State::Menu;
+        statusText = "Failed to open a free port. Try again.";
+        state = State::Disconnected;
         return;
     }
-    discovery.StartHost("Starfall", port);
+    portText = std::to_string(net.GetBoundPort());
+    discovery.StartHost("Starfall", net.GetBoundPort());
     statusText = "Waiting for a player to join...";
     state = State::HostLobby;
 }
