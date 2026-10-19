@@ -1,10 +1,14 @@
 #pragma once
 #include "Asteroid.h"
 #include "AudioManager.h"
+#include "Background.h"
 #include "Bullet.h"
+#include "CameraEffects.h"
 #include "Discovery.h"
 #include "Enemy.h"
+#include "GlowLayer.h"
 #include "NetPeer.h"
+#include "ParticleSystem.h"
 #include "Player.h"
 #include "Protocol.h"
 #include "UI.h"
@@ -18,6 +22,7 @@ class Game {
 public:
     Game();
     void Run();
+    void RunBenchmark();
 
 private:
     enum class Mode { Survival, Host, Client };
@@ -32,6 +37,14 @@ private:
     void Draw() const;
     void DrawBackground() const;
     void DrawVersusField() const;
+    void UpdateVisuals(float deltaTime);
+    void EmitThrusterEffects();
+    void SpawnExplosion(Vector2 position, Color color, float scale);
+    void BeginField() const;
+    void EndField() const;
+    void DrawWorldGlowSurvival() const;
+    void DrawWorldGlowVersus() const;
+    const char* StateName() const;
 
     void UpdateSurvival(float deltaTime);
     void DrawSurvival() const;
@@ -82,6 +95,10 @@ private:
     Player players[2];
     UI ui;
     AudioManager audio;
+    Background background;
+    ParticleSystem particles;
+    CameraEffects cameraEffects;
+    GlowLayer glow;
 
     net::NetPeer net;
     net::Discovery discovery;
@@ -124,4 +141,9 @@ private:
     bool exitRequested = false;
     std::string statusText;
     std::string endNote;
+    float fadeTimer = 0.0f;
+    int lastVisualState = -1;
+    float celebrationTimer = 0.0f;
+
+    static constexpr float kFadeDuration = 0.28f;
 };

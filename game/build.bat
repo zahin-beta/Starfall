@@ -31,6 +31,8 @@ g++ -std=c++17 -O2 -Wall -Wextra -I"%GAME_DIR%include" -I"%RAYLIB_DIR%\include" 
     "%GAME_DIR%src\Collision.cpp" "%GAME_DIR%src\UI.cpp" "%GAME_DIR%src\AudioManager.cpp" ^
     "%GAME_DIR%src\NetPeer.cpp" "%GAME_DIR%src\Discovery.cpp" ^
     "%GAME_DIR%src\ShipCatalog.cpp" "%GAME_DIR%src\ShipRenderer.cpp" ^
+    "%GAME_DIR%src\Background.cpp" "%GAME_DIR%src\ParticleSystem.cpp" ^
+    "%GAME_DIR%src\CameraEffects.cpp" "%GAME_DIR%src\GlowLayer.cpp" ^
     -static -static-libgcc -static-libstdc++ -o "%OUT_DIR%\Starfall.exe" -lraylib -lopengl32 -lgdi32 -lwinmm -lws2_32
 if errorlevel 1 (
     echo Build failed.

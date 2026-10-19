@@ -39,6 +39,11 @@ Color Alpha(Color color, unsigned char value) {
     return color;
 }
 
+Color Blend(Color a, Color b, float t) {
+    return Color{Clamp255(a.r + (b.r - a.r) * t), Clamp255(a.g + (b.g - a.g) * t),
+                 Clamp255(a.b + (b.b - a.b) * t), Clamp255(a.a + (b.a - a.a) * t)};
+}
+
 // raylib's DrawTriangle back-face-culls: triangles wound clockwise in the
 // y-down screen space are dropped. Normalize every triangle to the winding
 // that survives so ship geometry always renders regardless of authored order.
@@ -68,7 +73,7 @@ void FillQuad(const Frame& f, float aL, float aF, float bL, float bF, float cL, 
     FillTriColored(P(f, aL, aF), P(f, cL, cF), P(f, dL, dF), color);
 }
 
-void DrawFlame(const Frame& f, float throttle, bool reversing) {
+void DrawFlame(const Frame& f, float throttle, bool reversing, Color accent) {
     if (throttle > 0.01f) {
         const float flicker = 0.80f + 0.14f * std::sin(GetTime() * 47.0f) + 0.06f * std::sin(GetTime() * 91.0f);
         const float length = (0.42f + 1.40f * throttle) * f.radius * flicker;
@@ -76,13 +81,13 @@ void DrawFlame(const Frame& f, float throttle, bool reversing) {
         const float rear = -0.92f;
 
         FillTriColored(P(f, -halfWidth, rear), P(f, halfWidth, rear),
-                       P(f, 0.0f, rear - length / f.radius), Alpha(Color{255, 132, 44, 255},
+                       P(f, 0.0f, rear - length / f.radius), Alpha(Blend(Color{255, 132, 44, 255}, accent, 0.22f),
                                                                    Clamp255(60.0f + 150.0f * throttle)));
 
         const float midLength = length * 0.60f;
         const float midWidth = halfWidth * 0.60f;
         FillTriColored(P(f, -midWidth, rear), P(f, midWidth, rear),
-                       P(f, 0.0f, rear - midLength / f.radius), Alpha(Color{255, 212, 116, 255},
+                       P(f, 0.0f, rear - midLength / f.radius), Alpha(Blend(Color{255, 212, 116, 255}, accent, 0.15f),
                                                                      Clamp255(100.0f + 130.0f * throttle)));
 
         const float coreLength = length * 0.30f;
@@ -263,7 +268,7 @@ void ShipRenderer::DrawShip(const ShipDef& ship, Vector2 position, float aimAngl
     const Color hull = Alpha(ship.hullColor, alpha);
     const Color accent = Alpha(ship.accentColor, alpha);
 
-    DrawFlame(frame, throttle, reversing);
+    DrawFlame(frame, throttle, reversing, ship.accentColor);
 
     switch (ship.shape) {
         case ShapeInterceptor: DrawInterceptor(frame, hull, accent, outline, alpha); break;

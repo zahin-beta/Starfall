@@ -1,5 +1,6 @@
 #pragma once
 #include "raylib.h"
+#include <array>
 class Asteroid {
 public:
     Asteroid(Vector2 startPosition, Vector2 velocity, float radius);
@@ -13,4 +14,10 @@ public:
 private:
     Vector2 position{}, velocity{};
     float radius = 20.0f, rotation = 0.0f;
+    float spinSpeed = 35.0f;
+    int sides = 8;
+    int palette = 0;
+    std::array<float, 10> vertexScale{};
+    std::array<Vector2, 2> craters{};
+    std::array<float, 2> craterRadius{};
 };

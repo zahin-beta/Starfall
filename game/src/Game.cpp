@@ -2,7 +2,9 @@
 #include "Collision.h"
 #include "raylib.h"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
@@ -30,6 +32,8 @@ Game::Game() {
 
 void Game::Run() {
     InitWindow(kScreenWidth, kScreenHeight, "Starfall");
+    background.Init(kScreenWidth, kScreenHeight);
+    glow.Init(kScreenWidth, kScreenHeight);
     SetTargetFPS(60);
     SetExitKey(KEY_NULL);
     audio.Initialize();
@@ -41,6 +45,8 @@ void Game::Run() {
     net.Close();
     discovery.Stop();
     audio.Shutdown();
+    glow.Shutdown();
+    background.Shutdown();
     CloseWindow();
 }
 
@@ -91,6 +97,53 @@ InputCommand Game::LocalHostInput() const {
     return players[0].ReadKeyboard();
 }
 
+void Game::SpawnExplosion(Vector2 position, Color color, float scale) {
+    particles.EmitExplosion(position, color, scale);
+}
+
+void Game::BeginField() const {
+    if (!cameraEffects.IsShaking()) return;
+    Camera2D camera{};
+    camera.zoom = 1.0f;
+    const Vector2 offset = cameraEffects.GetOffset();
+    camera.target = Vector2{-offset.x, -offset.y};
+    BeginMode2D(camera);
+}
+
+void Game::EndField() const {
+    if (!cameraEffects.IsShaking()) return;
+    EndMode2D();
+}
+
+void Game::EmitThrusterEffects() {
+    for (int i = 0; i < 2; ++i) {
+        const Player& player = players[i];
+        if (player.GetHealth() <= 0) continue;
+        const float throttle = player.GetThrottle();
+        const bool reversing = player.IsReversing();
+        if (throttle <= 0.05f && !reversing) continue;
+        const Vector2 aim = player.AimDirection();
+        const float radius = player.GetRadius();
+        if (throttle > 0.05f) {
+            const Vector2 rear{player.GetPosition().x - aim.x * radius,
+                               player.GetPosition().y - aim.y * radius};
+            particles.EmitThruster(rear, Vector2{-aim.x, -aim.y}, player.Def().accentColor, throttle);
+        }
+        if (reversing) {
+            const Vector2 nose{player.GetPosition().x + aim.x * radius,
+                               player.GetPosition().y + aim.y * radius};
+            particles.EmitThruster(nose, aim, player.Def().accentColor, 0.35f);
+        }
+    }
+}
+
+void Game::UpdateVisuals(float deltaTime) {
+    background.Update(deltaTime);
+    particles.Update(deltaTime);
+    cameraEffects.Update(deltaTime);
+    if (state == State::Playing) EmitThrusterEffects();
+}
+
 void Game::Update(float deltaTime) {
     switch (state) {
         case State::Menu: UpdateMenu(); break;
@@ -124,11 +177,46 @@ void Game::Update(float deltaTime) {
                 if (mode == Mode::Survival) { ResetSurvival(); state = State::Playing; }
                 else ReturnToMenu();
             }
+            if (mode != Mode::Survival) {
+                celebrationTimer -= deltaTime;
+                if (celebrationTimer <= 0.0f) {
+                    celebrationTimer = 0.35f;
+                    const int winner = wins[0] >= kRoundsToWin ? 0 : 1;
+                    const float x = winner == 0 ? kScreenWidth * 0.28f : kScreenWidth * 0.72f;
+                    particles.EmitCelebration(Vector2{x, 140.0f}, Color{255, 210, 88, 255});
+                }
+            }
             break;
         case State::Disconnected:
             if (IsKeyPressed(KEY_ENTER)) ReturnToMenu();
             break;
     }
+    UpdateVisuals(deltaTime);
+    fadeTimer = std::max(0.0f, fadeTimer - deltaTime);
+    if (static_cast<int>(state) != lastVisualState) {
+        lastVisualState = static_cast<int>(state);
+        fadeTimer = kFadeDuration;
+        std::printf("STATE: %s\n", StateName());
+        std::fflush(stdout);
+    }
+}
+
+const char* Game::StateName() const {
+    switch (state) {
+        case State::Menu: return "Menu";
+        case State::ShipSelect: return "ShipSelect";
+        case State::PortEntry: return "PortEntry";
+        case State::HostLobby: return "HostLobby";
+        case State::ClientLobby: return "ClientLobby";
+        case State::ManualEntry: return "ManualEntry";
+        case State::Connecting: return "Connecting";
+        case State::Playing: return "Playing";
+        case State::Paused: return "Paused";
+        case State::Forfeiting: return "Forfeiting";
+        case State::GameOver: return "GameOver";
+        case State::Disconnected: return "Disconnected";
+    }
+    return "?";
 }
 
 void Game::UpdatePause(float deltaTime) {
@@ -231,6 +319,12 @@ void Game::UpdateHostLobby(float deltaTime) {
     discovery.Update(deltaTime);
     net.Update(deltaTime);
     PumpReliable();
+    if (state != State::HostLobby) return;
+    if (IsKeyPressed(KEY_ESCAPE)) {
+        net.Close();
+        discovery.Stop();
+        state = State::Menu;
+    }
 }
 
 void Game::UpdateClientLobby(float deltaTime) {
@@ -351,6 +445,7 @@ void Game::ResetSurvival() {
     bullets.clear();
     asteroids.clear();
     enemies.clear();
+    particles.Clear();
     spawnTimer = 0.45f;
     elapsedTime = 0.0f;
     score = 0;
@@ -528,6 +623,7 @@ void Game::ResetRound() {
     vsBullets.clear();
     remoteBullets.clear();
     vsAsteroids.clear();
+    particles.Clear();
     vsSpawnTimer = 2.0f;
     SpawnVersusAsteroids(3);
     phase = net::MatchPhase::Playing;
@@ -580,6 +676,8 @@ void Game::HostStep() {
             wins[1 - dead] += 1;
             phase = net::MatchPhase::RoundOver;
             phaseTimer = 2.0f;
+            SpawnExplosion(players[dead].GetPosition(), players[dead].GetColor(), 1.5f);
+            cameraEffects.Shake(7.0f, 0.35f);
             audio.PlayGameOver();
         }
     } else if (phase == net::MatchPhase::RoundOver) {
@@ -701,15 +799,32 @@ void Game::ApplySnapshot(const net::SnapshotMsg& snapshot) {
     while (!inputHistory.empty() && inputHistory.front().first <= snapshot.ackedInputTick) inputHistory.pop_front();
     for (const auto& entry : inputHistory) players[localId].Update(kStep, entry.second);
 
-    remoteBullets.clear();
+    std::vector<Bullet> keptRemote;
+    keptRemote.reserve(snapshot.bulletCount);
+    int remoteIndex = 0;
     for (int i = 0; i < snapshot.bulletCount; ++i) {
         if (snapshot.bullets[i].owner == static_cast<uint8_t>(localId)) continue;
         const int owner = snapshot.bullets[i].owner;
-        remoteBullets.emplace_back(Vector2{snapshot.bullets[i].x, snapshot.bullets[i].y},
-                                   VelocityFromAngle(snapshot.bullets[i].angle, players[owner].Def().bulletSpeed),
-                                   players[owner].GetColor(), owner);
+        const Vector2 position{snapshot.bullets[i].x, snapshot.bullets[i].y};
+        if (remoteIndex < static_cast<int>(remoteBullets.size())) {
+            Bullet& bullet = remoteBullets[remoteIndex];
+            bullet.SetVelocity(VelocityFromAngle(snapshot.bullets[i].angle, players[owner].Def().bulletSpeed));
+            bullet.SetPosition(position);
+            keptRemote.push_back(bullet);
+        } else {
+            keptRemote.emplace_back(position,
+                                    VelocityFromAngle(snapshot.bullets[i].angle, players[owner].Def().bulletSpeed),
+                                    players[owner].GetColor(), owner);
+        }
+        ++remoteIndex;
     }
+    remoteBullets.swap(keptRemote);
 
+    const int asteroidCount = snapshot.asteroidCount;
+    for (int i = asteroidCount; i < static_cast<int>(vsAsteroids.size()); ++i) {
+        SpawnExplosion(vsAsteroids[i].GetPosition(), Color{178, 150, 128, 255},
+                       vsAsteroids[i].GetRadius() / 22.0f);
+    }
     vsAsteroids.clear();
     for (int i = 0; i < snapshot.asteroidCount; ++i) {
         vsAsteroids.emplace_back(Vector2{snapshot.asteroids[i].x, snapshot.asteroids[i].y},
@@ -719,11 +834,19 @@ void Game::ApplySnapshot(const net::SnapshotMsg& snapshot) {
 
     const int health0 = snapshot.players[0].health;
     const int health1 = snapshot.players[localId].health;
+    if (health1 < previousHealth[1]) {
+        if (health1 <= 0) SpawnExplosion(players[localId].GetPosition(), players[localId].GetColor(), 1.5f);
+        else particles.EmitHitSpark(players[localId].GetPosition(), players[localId].GetColor());
+        cameraEffects.Shake(health1 <= 0 ? 7.0f : 3.5f, health1 <= 0 ? 0.35f : 0.18f);
+    }
+    if (health0 < previousHealth[0]) {
+        if (health0 <= 0) SpawnExplosion(players[0].GetPosition(), players[0].GetColor(), 1.5f);
+        else particles.EmitHitSpark(players[0].GetPosition(), players[0].GetColor());
+    }
     if (health1 < previousHealth[1] || health0 < previousHealth[0]) audio.PlayHit();
     previousHealth[0] = health0;
     previousHealth[1] = health1;
 
-    const int asteroidCount = snapshot.asteroidCount;
     if (asteroidCount < previousAsteroidCount) audio.PlayExplosion();
     previousAsteroidCount = asteroidCount;
 
@@ -746,6 +869,8 @@ void Game::ResolveVersusCollisions() {
             if (Collision::CirclesOverlap(vsBullets[i].GetPosition(), vsBullets[i].GetRadius(),
                                           vsAsteroids[j].GetPosition(), vsAsteroids[j].GetRadius())) {
                 asteroidDead[j] = true;
+                SpawnExplosion(vsAsteroids[j].GetPosition(), Color{178, 150, 128, 255},
+                               vsAsteroids[j].GetRadius() / 22.0f);
                 audio.PlayExplosion();
                 if (!vsBullets[i].TryPierce()) bulletDead[i] = true;
                 break;
@@ -760,6 +885,8 @@ void Game::ResolveVersusCollisions() {
                                       players[target].GetPosition(), players[target].GetRadius())) {
             if (players[target].GetHealth() > 0) {
                 players[target].TakeDamage();
+                particles.EmitHitSpark(players[target].GetPosition(), players[target].GetColor());
+                if (target == localId) cameraEffects.Shake(3.5f, 0.18f);
                 audio.PlayHit();
             }
             bulletDead[i] = true;
@@ -771,7 +898,12 @@ void Game::ResolveVersusCollisions() {
         for (int t = 0; t < 2; ++t) {
             if (Collision::CirclesOverlap(players[t].GetPosition(), players[t].GetRadius(),
                                           vsAsteroids[j].GetPosition(), vsAsteroids[j].GetRadius())) {
+                const int healthBefore = players[t].GetHealth();
                 players[t].TakeDamage();
+                if (players[t].GetHealth() < healthBefore) {
+                    particles.EmitHitSpark(players[t].GetPosition(), players[t].GetColor());
+                    if (t == localId) cameraEffects.Shake(3.5f, 0.18f);
+                }
             }
         }
     }
@@ -832,6 +964,8 @@ void Game::UpdateSurvival(float deltaTime) {
         for (auto asteroid = asteroids.begin(); asteroid != asteroids.end(); ++asteroid) {
             if (Collision::CirclesOverlap(bullet->GetPosition(), bullet->GetRadius(),
                                           asteroid->GetPosition(), asteroid->GetRadius())) {
+                SpawnExplosion(asteroid->GetPosition(), Color{178, 150, 128, 255},
+                               asteroid->GetRadius() / 22.0f);
                 asteroids.erase(asteroid);
                 score += 100;
                 audio.PlayExplosion();
@@ -847,40 +981,68 @@ void Game::UpdateSurvival(float deltaTime) {
         if (Collision::CirclesOverlap(players[0].GetPosition(), players[0].GetRadius(),
                                       asteroid.GetPosition(), asteroid.GetRadius())) players[0].TakeDamage();
     }
-    if (players[0].GetHealth() < healthBefore) audio.PlayHit();
+    if (players[0].GetHealth() < healthBefore) {
+        particles.EmitHitSpark(players[0].GetPosition(), players[0].GetColor());
+        cameraEffects.Shake(3.5f, 0.18f);
+        audio.PlayHit();
+    }
 
     bullets.erase(std::remove_if(bullets.begin(), bullets.end(),
         [](const Bullet& bullet) { return bullet.IsOffScreen(); }), bullets.end());
     asteroids.erase(std::remove_if(asteroids.begin(), asteroids.end(),
         [](const Asteroid& asteroid) { return asteroid.IsOffScreen(); }), asteroids.end());
 
-    if (players[0].GetHealth() <= 0) { state = State::GameOver; audio.PlayGameOver(); audio.SetMusicVolume(0.2f); }
-}
-
-void Game::DrawBackground() const {
-    ClearBackground(Color{5, 9, 24, 255});
-    for (int i = 0; i < 75; ++i) {
-        const int x = (i * 137 + 41) % kScreenWidth;
-        const int y = (i * 223 + 17) % kScreenHeight;
-        const int radius = (i % 9 == 0) ? 2 : 1;
-        const unsigned char alpha = static_cast<unsigned char>(105 + (i * 31) % 145);
-        DrawCircle(x, y, static_cast<float>(radius), Color{180, 211, 255, alpha});
+    if (players[0].GetHealth() <= 0) {
+        SpawnExplosion(players[0].GetPosition(), players[0].GetColor(), 1.5f);
+        cameraEffects.Shake(7.0f, 0.35f);
+        state = State::GameOver;
+        audio.PlayGameOver();
+        audio.SetMusicVolume(0.2f);
     }
 }
 
+void Game::DrawBackground() const {
+    background.Draw();
+}
+
+void Game::DrawWorldGlowSurvival() const {
+    glow.Begin();
+    for (const auto& bullet : bullets) bullet.DrawGlow();
+    particles.DrawGlow();
+    glow.End();
+}
+
+void Game::DrawWorldGlowVersus() const {
+    glow.Begin();
+    for (const auto& bullet : vsBullets) bullet.DrawGlow();
+    for (const auto& bullet : remoteBullets) bullet.DrawGlow();
+    particles.DrawGlow();
+    glow.End();
+}
+
 void Game::DrawSurvival() const {
+    BeginField();
     for (const auto& bullet : bullets) bullet.Draw();
     for (const auto& asteroid : asteroids) asteroid.Draw();
     for (const auto& enemy : enemies) enemy.Draw();
+    particles.Draw();
     players[0].Draw();
+    DrawWorldGlowSurvival();
+    glow.Draw();
+    EndField();
 }
 
 void Game::DrawVersusField() const {
+    BeginField();
     for (const auto& bullet : vsBullets) bullet.Draw();
     for (const auto& bullet : remoteBullets) bullet.Draw();
     for (const auto& asteroid : vsAsteroids) asteroid.Draw();
+    particles.Draw();
     players[0].Draw();
     players[1].Draw();
+    DrawWorldGlowVersus();
+    glow.Draw();
+    EndField();
     ui.DrawVersusHud(players[0].GetHealth(), players[0].GetMaxHealth(), players[0].GetShipName(),
                      players[1].GetHealth(), players[1].GetMaxHealth(), players[1].GetShipName(),
                      wins[0], wins[1]);
@@ -934,5 +1096,116 @@ void Game::Draw() const {
             break;
         case State::Disconnected: ui.DrawDisconnected(statusText); break;
     }
+    if (fadeTimer > 0.0f) {
+        const unsigned char fadeAlpha = static_cast<unsigned char>(190.0f * (fadeTimer / kFadeDuration));
+        DrawRectangle(0, 0, GetScreenWidth(), GetScreenHeight(), Color{2, 4, 12, fadeAlpha});
+    }
     EndDrawing();
+}
+
+void Game::RunBenchmark() {
+    InitWindow(kScreenWidth, kScreenHeight, "Starfall Benchmark");
+    background.Init(kScreenWidth, kScreenHeight);
+    glow.Init(kScreenWidth, kScreenHeight);
+    SetTargetFPS(0);
+    SetExitKey(KEY_NULL);
+
+    mode = Mode::Survival;
+    state = State::Playing;
+    localId = 0;
+    players[0] = Player(MakePlayerConfig(0, 3));
+    players[0].Reset();
+
+    asteroids.clear();
+    bullets.clear();
+    particles.Clear();
+    for (int i = 0; i < 55; ++i) {
+        const float x = static_cast<float>(GetRandomValue(30, kScreenWidth - 30));
+        const float y = static_cast<float>(GetRandomValue(0, kScreenHeight));
+        const float radius = static_cast<float>(GetRandomValue(17, 32));
+        asteroids.emplace_back(Vector2{x, y},
+                               Vector2{static_cast<float>(GetRandomValue(-40, 40)),
+                                       static_cast<float>(GetRandomValue(60, 150))},
+                               radius);
+    }
+
+    InputCommand script;
+    script.thrust = true;
+    script.rotateRight = true;
+    script.fire = true;
+    float fireTimer = 0.0f;
+    float explosionTimer = 0.0f;
+
+    constexpr int kFrames = 600;
+    std::vector<double> frameTimes;
+    frameTimes.reserve(kFrames);
+    auto previous = std::chrono::steady_clock::now();
+    for (int frame = 0; frame < kFrames && !WindowShouldClose(); ++frame) {
+        const auto now = std::chrono::steady_clock::now();
+        float deltaTime = std::chrono::duration<float>(now - previous).count();
+        previous = now;
+        if (deltaTime > 0.05f) deltaTime = 0.05f;
+        if (deltaTime <= 0.0f) deltaTime = 1.0f / 60.0f;
+
+        const auto iterationStart = now;
+
+        players[0].Update(deltaTime, script);
+        for (auto& bullet : bullets) bullet.Update(deltaTime);
+        for (auto& asteroid : asteroids) asteroid.Update(deltaTime);
+
+        fireTimer -= deltaTime;
+        if (fireTimer <= 0.0f) {
+            fireTimer = 0.12f;
+            const Vector2 direction = players[0].AimDirection();
+            const Vector2 muzzle{players[0].GetPosition().x + direction.x * (players[0].GetRadius() + 6.0f),
+                                 players[0].GetPosition().y + direction.y * (players[0].GetRadius() + 6.0f)};
+            bullets.emplace_back(muzzle, Vector2{direction.x * 720.0f, direction.y * 720.0f},
+                                 players[0].GetColor(), 0, 4.0f, 0);
+        }
+        explosionTimer -= deltaTime;
+        if (explosionTimer <= 0.0f && !asteroids.empty()) {
+            explosionTimer = 0.25f;
+            const int index = GetRandomValue(0, static_cast<int>(asteroids.size()) - 1);
+            particles.EmitExplosion(asteroids[index].GetPosition(), Color{178, 150, 128, 255},
+                                    asteroids[index].GetRadius() / 22.0f);
+            asteroids[index] = Asteroid(Vector2{static_cast<float>(GetRandomValue(30, kScreenWidth - 30)), -30.0f},
+                                        Vector2{static_cast<float>(GetRandomValue(-40, 40)), 110.0f},
+                                        static_cast<float>(GetRandomValue(17, 32)));
+        }
+
+        EmitThrusterEffects();
+        if (bullets.size() > 140) bullets.erase(bullets.begin(), bullets.begin() + 40);
+        asteroids.erase(std::remove_if(asteroids.begin(), asteroids.end(),
+            [](const Asteroid& asteroid) { return asteroid.IsOffScreen(); }), asteroids.end());
+        while (asteroids.size() < 50) {
+            asteroids.emplace_back(Vector2{static_cast<float>(GetRandomValue(30, kScreenWidth - 30)), -30.0f},
+                                   Vector2{0.0f, 100.0f}, 24.0f);
+        }
+        UpdateVisuals(deltaTime);
+
+        BeginDrawing();
+        DrawBackground();
+        DrawSurvival();
+        ui.DrawHud(0, players[0].GetHealth(), players[0].GetMaxHealth());
+        EndDrawing();
+
+        const auto iterationEnd = std::chrono::steady_clock::now();
+        frameTimes.push_back(std::chrono::duration<double, std::milli>(iterationEnd - iterationStart).count());
+    }
+
+    std::sort(frameTimes.begin(), frameTimes.end());
+    double sum = 0.0;
+    for (double value : frameTimes) sum += value;
+    const double avg = frameTimes.empty() ? 0.0 : sum / static_cast<double>(frameTimes.size());
+    const double p95 = frameTimes.empty() ? 0.0 : frameTimes[static_cast<size_t>(frameTimes.size() * 0.95)];
+    std::printf("Benchmark: %d frames\n", static_cast<int>(frameTimes.size()));
+    std::printf("  avg %.2f ms (%.0f FPS)\n", avg, avg > 0.0 ? 1000.0 / avg : 0.0);
+    std::printf("  p95 %.2f ms\n", p95);
+    std::printf("  max %.2f ms\n", frameTimes.empty() ? 0.0 : frameTimes.back());
+    std::printf("  scene: %d asteroids, %d bullets\n", static_cast<int>(asteroids.size()),
+                static_cast<int>(bullets.size()));
+
+    glow.Shutdown();
+    background.Shutdown();
+    CloseWindow();
 }
